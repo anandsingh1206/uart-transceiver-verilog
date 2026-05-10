@@ -1,0 +1,162 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+/* -----------------------------------------------------------------------------
+ * File        : uart_tx_3block.v
+ * Author      : Anand Singh
+ * Date        : April 2026
+ * Description : Full-duplex UART Transmitter module. 
+ * Implemented using a robust 3-block Moore state machine 
+ * for glitch-free serialization and optimal synthesis.
+ * ----------------------------------------------------------------------------- */
+//////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+module uart_tx_3block #(
+    parameter CLK_FREQ = 50000000, // 50 MHz system clock
+    parameter BAUD_RATE = 9600     // 9600 bps
+)(
+    input  wire       clk,
+    input  wire       rst,         // Synchronous active-high reset
+    input  wire       tx_start,    // Pulse high to start transmission
+    input  wire [7:0] data_in,     // Byte to transmit
+    output reg        tx,          // UART TX line
+    output reg        tx_done      // High during the STOP state
+);
+
+   
+    // STATE ENCODING
+   
+    localparam IDLE  = 2'b00;
+    localparam START = 2'b01;
+    localparam DATA  = 2'b10;
+    localparam STOP  = 2'b11;
+
+    reg [1:0] current_state, next_state;
+    
+    // Datapath registers
+    reg [2:0] bit_index;
+    reg [7:0] shift_reg; 
+
+   
+    // BAUD RATE GENERATOR (The Timer)
+  
+    localparam BAUD_LIMIT = (CLK_FREQ / BAUD_RATE) - 1;
+    reg [15:0] baud_counter;
+    wire       baud_tick;
+    
+    assign baud_tick = (baud_counter == BAUD_LIMIT);
+
+    always @(posedge clk) begin
+        if (rst) begin
+            baud_counter <= 16'd0;
+        end else begin
+            // Hold counter at 0 when idle so first bit is perfectly timed
+            if (current_state == IDLE && !tx_start) begin
+                baud_counter <= 16'd0;
+            end else if (baud_tick) begin
+                baud_counter <= 16'd0;
+            end else begin
+                baud_counter <= baud_counter + 16'd1;
+            end
+        end
+    end
+
+   
+    // BLOCK 1: FSM State Memory (Sequential Logic)
+    // Updates current_state strictly on the clock edge using Non-Blocking (<=).
+   
+    always @(posedge clk) begin
+        if (rst) begin
+            current_state <= IDLE;
+        end else begin
+            current_state <= next_state;
+        end
+    end
+
+   
+    // BLOCK 2: FSM Next State Logic (Combinational Logic)
+  
+    
+    always @(*) begin
+        next_state = current_state; // Default: stay in current state
+
+        case (current_state)
+            IDLE: begin
+                if (tx_start) next_state = START;
+            end
+            
+            START: begin
+                if (baud_tick) next_state = DATA;
+            end
+            
+            DATA: begin
+                // Move to STOP only when the 8th bit is done and the timer ticks
+                if (baud_tick && bit_index == 3'd7) next_state = STOP;
+            end
+            
+            STOP: begin
+                if (baud_tick) next_state = IDLE;
+            end
+            
+            default: next_state = IDLE;
+        endcase
+    end
+
+  
+    // BLOCK 3: FSM Output Logic (Combinational Logic)
+  
+   
+    always @(*) begin
+        // Default outputs prevent latches
+        tx      = 1'b1; 
+        tx_done = 1'b0;
+
+        case (current_state)
+            IDLE: begin
+                tx      = 1'b1;
+            end
+            
+            START: begin
+                tx      = 1'b0; // Pull low for start bit
+            end
+            
+            DATA: begin
+                tx      = shift_reg[bit_index]; // Drive the current data bit
+            end
+            
+            STOP: begin
+                tx      = 1'b1; // Pull high for stop bit
+                tx_done = 1'b1; // Signal completion
+            end
+            // No default needed as all states are covered, but good practice:
+            default: begin
+                tx      = 1'b1;
+                tx_done = 1'b0;
+            end
+        endcase
+    end
+
+    
+    // DATAPATH: Registers for Shift Data and Bit Index (Sequential Logic)
+    // Controlled by the FSM states and the clock.
+   
+    always @(posedge clk) begin
+        if (rst) begin
+            bit_index <= 3'd0;
+            shift_reg <= 8'd0;
+        end else begin
+            // Load data when leaving IDLE
+            if (current_state == IDLE && tx_start) begin
+                shift_reg <= data_in;
+                bit_index <= 3'd0;
+            end 
+            // Increment the bit index only during the DATA state on a baud tick
+            else if (current_state == DATA && baud_tick) begin
+                bit_index <= bit_index + 3'd1;
+            end
+        end
+    end
+
+endmodule

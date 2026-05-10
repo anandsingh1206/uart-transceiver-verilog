@@ -1,0 +1,122 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+/* -----------------------------------------------------------------------------
+ * File        : uart_tb.v
+ * Author      : Anand Singh
+ * Date        : April 2026
+ * Description : Full-duplex UART Transmitter module. 
+ * Implemented using a robust 3-block Moore state machine 
+ * for glitch-free serialization and optimal synthesis.
+ * ----------------------------------------------------------------------------- */
+//////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+module uart_tb();
+
+    
+    // 1. TESTBENCH SIGNALS
+   
+    reg clk;
+    reg rst;
+    
+    // TX Inputs
+    reg tx_start;
+    reg [7:0] tx_data_in;
+    
+    // The physical wire connecting TX to RX
+    wire serial_line;
+    
+    // TX/RX Outputs
+    wire tx_done;
+    wire rx_done;
+    wire [7:0] rx_data_out;
+
+   
+    // 2. CLOCK GENERATION (50 MHz = 20ns period)
+   
+    initial begin
+        clk = 0;
+        forever #10 clk = ~clk; // Toggle every 10ns
+    end
+
+    
+    // 3. MODULE INSTANTIATION
+   
+    // Instantiate Transmitter
+    uart_tx_3block #(
+        .CLK_FREQ(50000000), 
+        .BAUD_RATE(9600)
+    ) TX_INST (
+        .clk(clk),
+        .rst(rst),
+        .tx_start(tx_start),
+        .data_in(tx_data_in),
+        .tx(serial_line),      // Output connected to the wire
+        .tx_done(tx_done)
+    );
+
+    // Instantiate Receiver
+    uart_rx_3block #(
+        .CLK_FREQ(50000000), 
+        .BAUD_RATE(9600)
+    ) RX_INST (
+        .clk(clk),
+        .rst(rst),
+        .rx(serial_line),      // Input connected from the wire
+        .data_out(rx_data_out),
+        .rx_done(rx_done)
+    );
+
+   
+    // 4. THE STIMULUS (The actual test sequence)
+   
+    initial begin
+        // Initialize inputs
+        rst = 1;
+        tx_start = 0;
+        tx_data_in = 8'h00;
+
+        // Wait a bit, then release reset
+        #100;
+        rst = 0;
+        #100;
+
+        // --- TEST CASE 1: Send the letter 'A' (8'h41) ---
+        $display("Starting Test Case 1...");
+        tx_data_in = 8'h41; 
+        
+        // Pulse tx_start high to begin transmission
+            tx_start = 1;
+            #20;
+            tx_start = 0;
+        
+            // 1. Wait dynamically for the RECEIVER to finish its job
+            @(negedge rx_done); 
+            
+            // 2. Give the data wires a tiny moment to settle
+            #50000; 
+        
+            // 3. NOW check the result
+            if (rx_data_out == 8'h41) begin
+                $display("========================================");
+                $display("SUCCESS: Sent 8'h41, Received 8'h41");
+                $display("========================================");
+            end else begin
+                $display("ERROR: Expected 8'h41, but got %h", rx_data_out);
+            end
+            
+            // 4. WAIT A LONG TIME before killing the simulation so the waveform records completely!
+            #500000; // Wait 500 microseconds
+            
+            $finish;
+    end
+
+    // Optional: Dump waves for Vivado
+    initial begin
+        $dumpfile("uart_sim.vcd");
+        $dumpvars(0, uart_tb);
+    end
+
+endmodule
